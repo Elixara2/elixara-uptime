@@ -1,0 +1,39 @@
+name: Store uptime
+# Checks shopelixara.com from outside every 5 minutes. The server repairs itself (systemd restarts plus
+# a one-minute watchdog); this is the alarm for when the whole server or Cloudflare path is gone and
+# the server can't raise it. A failure pushes to the owner's phone (ntfy) and fails the run, which
+# also makes GitHub email the account.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+    - cron: "17 3 1 * *"        # monthly keep-alive commit: GitHub pauses schedules after 60 quiet days
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  check:
+    if: github.event.schedule != '17 3 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check the store
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          ok() { code=$(curl -s -m 30 -o page.html -w "%{http_code}" -A "elixara-uptime" https://shopelixara.com/); [ "$code" = 200 ] && grep -qi "elixara" page.html && ! grep -qi "critical error" page.html; }
+          ok && { echo "up ($code)"; exit 0; }
+          sleep 60
+          ok && { echo "up after retry ($code)"; exit 0; }
+          echo "DOWN: HTTP $code"
+          curl -s -m 15 -H "Title: Elixara store is DOWN (outside check)" -H "Priority: urgent" -H "Tags: rotating_light" \
+            -d "shopelixara.com is not loading for shoppers (HTTP $code). Open Claude Code and say: store is down." "https://ntfy.sh/$NTFY_TOPIC" >/dev/null
+          exit 1
+  keepalive:
+    if: github.event.schedule == '17 3 1 * *'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          date -u > .keepalive
+          git config user.name "uptime-bot"; git config user.email "uptime-bot@users.noreply.github.com"
+          git add .keepalive && git commit -m "keep-alive" && git push
